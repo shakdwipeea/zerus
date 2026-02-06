@@ -201,9 +201,10 @@ int clamp(int d, int min, int max)
 }
 
 // Read file data to string_t
-static string_t* read_file(allocator* alloc, const char* path)
+__attribute__((unused)) static string_t* read_file(allocator*  alloc,
+                                                   const char* path)
 {
-    FILE *file = fopen(path, "rb");
+    FILE* file = fopen(path, "rb");
     if (!file)
     {
         return NULL;
@@ -214,34 +215,40 @@ static string_t* read_file(allocator* alloc, const char* path)
     long file_size = ftell(file);
     fseek(file, 0, SEEK_SET);
 
-    if (file_size < 0) {
+    if (file_size < 0)
+    {
         fclose(file);
         return NULL;
     }
 
     // Allocate one contiguous memory block for the header, the string_t view,
     // the file content, and a null terminator. This makes cleanup trivial.
-    size_t total_size = sizeof(string_t) + file_size + 1;
-    string_t* data = alloc->malloc(total_size, alloc->ctx);
-    if (!data) {
+    size_t    total_size = sizeof(string_t) + file_size + 1;
+    string_t* data       = alloc->malloc(total_size, alloc->ctx);
+    if (!data)
+    {
         fclose(file);
         return NULL;
     }
 
     data->len = file_size;
 
-    // The character buffer starts immediately after the string_t element in our single block.
-    char* buffer = (char*)(data + 1);
+    // The character buffer starts immediately after the string_t element in our
+    // single block.
+    char* buffer = (char*) (data + 1);
 
-    // The final string_t will still hold a const pointer, providing read-only access.
+    // The final string_t will still hold a const pointer, providing read-only
+    // access.
     data->chars = buffer;
 
     // Read the entire file into our allocated buffer.
     size_t bytes_read = fread(buffer, 1, file_size, file);
     fclose(file);
 
-    if (bytes_read != (size_t)file_size) {
-        // If we couldn't read the whole file, something is wrong. Free the memory and fail.
+    if (bytes_read != (size_t) file_size)
+    {
+        // If we couldn't read the whole file, something is wrong. Free the
+        // memory and fail.
         alloc->free(data, alloc->ctx);
         return NULL;
     }
@@ -250,7 +257,9 @@ static string_t* read_file(allocator* alloc, const char* path)
 }
 
 // write to file
-static bool write_file(const char* path, const char* data, size_t size)
+__attribute__((unused)) static bool write_file(const char* path,
+                                               const char* data,
+                                               size_t      size)
 {
     FILE* file = fopen(path, "wb");
     if (!file)
@@ -265,9 +274,11 @@ static bool write_file(const char* path, const char* data, size_t size)
 }
 
 // Helper to check if a file exists and is not empty
-static bool file_exists(const char* path) {
+__attribute__((unused)) static bool file_exists(const char* path)
+{
     FILE* file = fopen(path, "rb");
-    if (!file) {
+    if (!file)
+    {
         return false;
     }
     fseek(file, 0, SEEK_END);

@@ -1,0 +1,4 @@
+# Suppress leaks from external libraries (NVIDIA driver, dbus, etc.)
+# These are not our code and we can't fix them.
+leak:libdbus
+leak:libnvidia

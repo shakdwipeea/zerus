@@ -35,6 +35,8 @@
 #include "prelude.h"
 #include "device.h"
 #include "surface.h"
+#include "frame.h"
+#include "renderer.h"
 
 
 // Engine version
@@ -71,6 +73,8 @@ typedef struct zerus_engine_state_t
 
     device_info_t  device_info;
     surface_info_t surface_info;
+    frame_state_t  frame_state;
+    renderer_t     renderer;
 } zerus_engine_state_t;
 
 
@@ -261,6 +265,15 @@ engine_error_t _init_vulkan(allocator* alloc, zerus_engine_state_t* engine)
         return VULKAN_SURFACE_FAILED;
     }
 
+    engine->frame_state = create_frame_state(engine->device_info);
+    if (engine->frame_state.status)
+    {
+        printf("error creating frame state %d \n", engine->frame_state.status);
+        return VULKAN_INSTANCE_FAILED;
+    }
+
+    engine->renderer = create_renderer();
+
     printf("Vulkan instance created...\n");
 
     alloc->free(extensions, alloc->ctx);  // Free immediately after use
@@ -273,7 +286,7 @@ zerus_engine_state_t zerus_engine_init(allocator* alloc)
     zerus_engine_state_t state = { .initialized = true, .alloc = alloc };
 
     // Initialize subsystems
-    printf("Initializing rendessrer... \n");
+    printf("Initializing renderer... \n");
     state.err = _init_vulkan(alloc, &state);
     if (state.err)
     {
@@ -291,6 +304,27 @@ ZERUS_CORE_DEF bool zerus_engine_update(zerus_engine_state_t* engine)
     {
         return false;
     }
+
+    frame_begin_result_t frame = begin_frame(&engine->frame_state,
+                                             &engine->device_info,
+                                             engine->surface_info.swapchain);
+    if (frame.status == FRAME_SWAPCHAIN_OUT_OF_DATE)
+    {
+        // TODO: recreate swapchain
+        return true;
+    }
+
+    record_frame(&engine->renderer,
+                 frame.cmd,
+                 engine->surface_info.images[frame.image_index],
+                 engine->surface_info.image_format,
+                 engine->surface_info.extent);
+
+    end_frame(&engine->frame_state,
+              &engine->device_info,
+              engine->surface_info.swapchain,
+              frame.image_index,
+              engine->surface_info.images[frame.image_index]);
 
     return true;
 }
@@ -318,6 +352,11 @@ ZERUS_CORE_DEF void zerus_engine_shutdown(zerus_engine_state_t* engine)
 
     if (engine->initialized)
     {
+        vkDeviceWaitIdle(engine->device_info.device);
+
+        destroy_renderer(&engine->renderer);
+        destroy_frame_state(engine->device_info, &engine->frame_state);
+
         destroy_debug_utils_messenger(engine->instance,
                                       engine->debug_messenger);
 

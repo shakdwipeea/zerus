@@ -80,6 +80,7 @@ typedef struct
     VkDevice         device;
     VkQueue          graphics_queue;
     VkQueue          compute_queue;
+    uint32_t         queue_index;
 } device_info_t;
 
 device_info_t pick_device(allocator* alloc, VkInstance instance)
@@ -104,6 +105,13 @@ device_info_t pick_device(allocator* alloc, VkInstance instance)
             printf("found discrete GPU device\n");
             break;
         }
+    }
+
+    // Fall back to any available device (e.g., integrated GPU, lavapipe)
+    if (choosen_device == nullptr && physical_devices->len > 0)
+    {
+        choosen_device = physical_devices->data[0];
+        printf("no discrete GPU found, using first available device\n");
     }
 
     if (choosen_device == nullptr)
@@ -160,7 +168,7 @@ device_info_t pick_device(allocator* alloc, VkInstance instance)
         return device_info;
     }
 
-    uint32_t                queue_count            = 0;
+    uint32_t                queue_count            = 1;
     float                   default_queue_priority = 1.0f;
     VkDeviceQueueCreateInfo queue_create_info[2] = { (VkDeviceQueueCreateInfo) {
         .sType            = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
@@ -204,6 +212,8 @@ device_info_t pick_device(allocator* alloc, VkInstance instance)
         return device_info;
     }
 
+
+    device_info.queue_index = graphics_queue_index;
 
     vkGetDeviceQueue(device_info.device,
                      graphics_queue_index,

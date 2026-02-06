@@ -80,6 +80,8 @@ set(SOURCES
         include/engine/prelude.h
         include/engine/device.h
         include/engine/surface.h
+        include/engine/frame.h
+        include/engine/renderer.h
         include/engine/shaders.h
 )
 
@@ -117,5 +119,9 @@ target_compile_options(${PROJECT_NAME} PRIVATE ${SHADERC_CFLAGS_OTHER})
 
 # Install target
 install(TARGETS ${PROJECT_NAME} DESTINATION bin)
+
+# Testing
+enable_testing()
+add_subdirectory(tests)
 
 

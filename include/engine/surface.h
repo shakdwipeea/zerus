@@ -1,5 +1,7 @@
 //
-// Created by akash on 5/7/25.
+// Zerus Game Engine - Surface Module
+//
+// GLFW window, Vulkan surface, swapchain, and image view management.
 //
 
 #ifndef SURFACE_H
@@ -25,8 +27,37 @@ typedef enum
 GLFWwindow* make_window()
 {
     glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
+    glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);
 
-    return glfwCreateWindow(800, 600, "Zerus", NULL, NULL);
+    GLFWwindow* window = glfwCreateWindow(800, 600, "Zerus", NULL, NULL);
+    if (!window)
+    {
+        fprintf(stderr, "Failed to create GLFW window\n");
+        return NULL;
+    }
+
+    // On Wayland/Hyprland, explicitly setting the window size after creation
+    // nudges the compositor into acknowledging the requested dimensions.
+    glfwSetWindowSize(window, 800, 600);
+
+    return window;
+}
+
+// On Wayland, a newly created window can report framebuffer size 0x0 until
+// the compositor is ready. Poll events until we get a real size.
+void wait_for_window_ready(GLFWwindow* window)
+{
+    int width = 0, height = 0;
+    while (width == 0 || height == 0)
+    {
+        glfwPollEvents();
+        glfwGetFramebufferSize(window, &width, &height);
+        if (width == 0 || height == 0)
+        {
+            glfwWaitEventsTimeout(0.01);
+        }
+    }
+    printf("Framebuffer ready: %dx%d\n", width, height);
 }
 
 string_array_t* get_glfw_extensions(allocator* alloc)
@@ -67,6 +98,16 @@ surface_info_t create_surface(allocator*    alloc,
 {
     surface_info_t surface_info = { 0 };
     surface_info.window         = make_window();
+
+    if (!surface_info.window)
+    {
+        surface_info.status = SURFACE_CREATION_FAILED;
+        return surface_info;
+    }
+
+    // Wait until the compositor gives us a real framebuffer size.
+    // On Wayland/Hyprland this can be 0x0 initially.
+    wait_for_window_ready(surface_info.window);
 
     VkResult res = glfwCreateWindowSurface(
         instance, surface_info.window, NULL, &surface_info.surface);
@@ -177,7 +218,8 @@ surface_info_t create_surface(allocator*    alloc,
         .imageColorSpace  = choosen_surface_format.colorSpace,
         .imageExtent      = (VkExtent2D) { width, height },
         .imageArrayLayers = 1,
-        .imageUsage       = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
+        .imageUsage
+        = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
         .imageSharingMode = VK_SHARING_MODE_EXCLUSIVE,
         .preTransform     = surface_capabilities.currentTransform,
         .compositeAlpha   = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR,

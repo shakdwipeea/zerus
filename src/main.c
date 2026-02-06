@@ -30,10 +30,15 @@ int main(int argc, char* argv[])
 
     printf("Zerus Game Engine v1.0.0\n");
     printf("Initializing engine...\n");
+    fflush(stdout);
 
     allocator std_alloc = { std_malloc, std_free, NULL };
 
-    glfwInit();
+    if (!glfwInit())
+    {
+        fprintf(stderr, "Failed to initialize GLFW\n");
+        return EXIT_FAILURE;
+    }
 
     zerus_engine_state_t engine = zerus_engine_init(&std_alloc);
 
@@ -44,6 +49,7 @@ int main(int argc, char* argv[])
     }
 
     printf("Engine initialized successfully\n");
+    fflush(stdout);
 
     // Update engine systems
     zerus_engine_start(&engine);
