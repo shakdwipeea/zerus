@@ -1,9 +1,9 @@
 //
-// Headless E2E test for engine/renderer.h
+// E2E tests for the Zerus renderer
 //
-// Creates a Vulkan instance without GLFW, renders to an offscreen image,
-// reads back pixels, and asserts correctness.
-// Also validates that zero Vulkan validation errors occur.
+// 1. Headless offscreen render with pixel readback
+// 2. Sustained multi-frame render with fence-based sync
+// 3. Asserts zero Vulkan validation errors across all tests
 //
 // Requires: Vulkan ICD (real GPU or lavapipe for CI)
 // Does NOT require: display server, GLFW, window
@@ -15,6 +15,8 @@
 #include <vulkan/vulkan.h>
 
 #include "engine/prelude.h"
+#include "engine/device.h"
+#include "engine/frame.h"
 #include "engine/renderer.h"
 
 // ---------------------------------------------------------------------------
@@ -502,6 +504,87 @@ static void test_headless_render(void)
 }
 
 // ---------------------------------------------------------------------------
+// Test: sustained rendering over many frames (fence-based sync)
+// ---------------------------------------------------------------------------
+
+#define SUSTAINED_FRAME_COUNT 100
+
+static void test_sustained_render(void)
+{
+    // Build a device_info_t from the test context so we can reuse the engine's
+    // frame helpers (create_frame_state, frame_begin_recording, etc.).
+    device_info_t dev_info = {
+        .device          = vk_ctx.device,
+        .physical_device = vk_ctx.physical_device,
+        .graphics_queue  = vk_ctx.queue,
+        .queue_index     = vk_ctx.queue_index,
+    };
+
+    frame_state_t frame = create_frame_state(dev_info);
+    TEST_ASSERT(frame.status == FRAME_OK, "failed to create frame state");
+
+    // -- Create a single offscreen image, reused across all frames --
+    VkImageCreateInfo image_info = {
+        .sType         = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
+        .imageType     = VK_IMAGE_TYPE_2D,
+        .format        = TEST_IMAGE_FORMAT,
+        .extent        = { TEST_IMAGE_WIDTH, TEST_IMAGE_HEIGHT, 1 },
+        .mipLevels     = 1,
+        .arrayLayers   = 1,
+        .samples       = VK_SAMPLE_COUNT_1_BIT,
+        .tiling        = VK_IMAGE_TILING_OPTIMAL,
+        .usage         = VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+        .sharingMode   = VK_SHARING_MODE_EXCLUSIVE,
+        .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+    };
+
+    VkImage  image;
+    VkResult res = vkCreateImage(vk_ctx.device, &image_info, NULL, &image);
+    TEST_ASSERT(res == VK_SUCCESS, "failed to create offscreen image: %d", res);
+
+    VkMemoryRequirements mem_req;
+    vkGetImageMemoryRequirements(vk_ctx.device, image, &mem_req);
+
+    uint32_t mem_type = find_memory_type(vk_ctx.physical_device,
+                                         mem_req.memoryTypeBits,
+                                         VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+    TEST_ASSERT(mem_type != UINT32_MAX, "no suitable memory type for image");
+
+    VkMemoryAllocateInfo mem_alloc = {
+        .sType           = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+        .allocationSize  = mem_req.size,
+        .memoryTypeIndex = mem_type,
+    };
+    VkDeviceMemory image_memory;
+    res = vkAllocateMemory(vk_ctx.device, &mem_alloc, NULL, &image_memory);
+    TEST_ASSERT(res == VK_SUCCESS, "failed to allocate image memory");
+    vkBindImageMemory(vk_ctx.device, image, image_memory, 0);
+
+    // -- Render loop: 100 frames with fence-based synchronization --
+    renderer_t renderer = create_renderer();
+    VkExtent2D extent   = { TEST_IMAGE_WIDTH, TEST_IMAGE_HEIGHT };
+
+    for (int i = 0; i < SUSTAINED_FRAME_COUNT; i++)
+    {
+        VkCommandBuffer cmd = frame_begin_recording(&frame, vk_ctx.device);
+        record_frame(&renderer, cmd, image, TEST_IMAGE_FORMAT, extent);
+
+        frame_status_t status = frame_end_and_submit(&frame, vk_ctx.queue);
+        TEST_ASSERT(
+            status == FRAME_OK, "frame_end_and_submit failed on frame %d", i);
+    }
+
+    // Wait for the last submission before cleanup
+    vkDeviceWaitIdle(vk_ctx.device);
+
+    // -- Cleanup --
+    destroy_renderer(&renderer);
+    destroy_frame_state(dev_info, &frame);
+    vkDestroyImage(vk_ctx.device, image, NULL);
+    vkFreeMemory(vk_ctx.device, image_memory, NULL);
+}
+
+// ---------------------------------------------------------------------------
 // Test: zero validation errors
 // ---------------------------------------------------------------------------
 
@@ -528,6 +611,7 @@ int main(void)
     }
 
     RUN_TEST(test_headless_render);
+    RUN_TEST(test_sustained_render);
     RUN_TEST(test_no_validation_errors);
 
     destroy_test_vulkan_ctx(&vk_ctx);

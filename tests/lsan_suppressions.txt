@@ -2,3 +2,5 @@
 # These are not our code and we can't fix them.
 leak:libdbus
 leak:libnvidia
+leak:libxcb
+leak:libLLVM

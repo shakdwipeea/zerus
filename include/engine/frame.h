@@ -94,15 +94,53 @@ frame_state_t create_frame_state(device_info_t device_info)
     return state;
 }
 
+// Wait for the in-flight fence, reset it, then reset and begin the command
+// buffer for recording.  Usable by both windowed (swapchain) and headless
+// (offscreen / test) paths.
+VkCommandBuffer frame_begin_recording(frame_state_t* frame, VkDevice device)
+{
+    vkWaitForFences(device, 1, &frame->in_flight, VK_TRUE, UINT64_MAX);
+    vkResetFences(device, 1, &frame->in_flight);
+
+    VkCommandBuffer cmd = frame->command_buffer;
+    vkResetCommandBuffer(cmd, 0);
+
+    VkCommandBufferBeginInfo begin_info = {
+        .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+        .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
+    };
+    vkBeginCommandBuffer(cmd, &begin_info);
+
+    return cmd;
+}
+
+// End recording and submit the command buffer with the in-flight fence.
+// No semaphore wait/signal — suitable for headless / offscreen rendering.
+frame_status_t frame_end_and_submit(frame_state_t* frame, VkQueue queue)
+{
+    vkEndCommandBuffer(frame->command_buffer);
+
+    VkSubmitInfo submit = {
+        .sType              = VK_STRUCTURE_TYPE_SUBMIT_INFO,
+        .commandBufferCount = 1,
+        .pCommandBuffers    = &frame->command_buffer,
+    };
+    VkResult res = vkQueueSubmit(queue, 1, &submit, frame->in_flight);
+    if (res != VK_SUCCESS)
+    {
+        printf("failed to submit command buffer: %d\n", res);
+        return FRAME_ERROR;
+    }
+    return FRAME_OK;
+}
+
 frame_begin_result_t begin_frame(frame_state_t* frame,
                                  device_info_t* device,
                                  VkSwapchainKHR swapchain)
 {
     frame_begin_result_t result = { 0 };
 
-    // Wait for previous frame to finish
-    vkWaitForFences(device->device, 1, &frame->in_flight, VK_TRUE, UINT64_MAX);
-    vkResetFences(device->device, 1, &frame->in_flight);
+    VkCommandBuffer cmd = frame_begin_recording(frame, device->device);
 
     // Acquire next swapchain image
     VkResult res = vkAcquireNextImageKHR(device->device,
@@ -116,16 +154,6 @@ frame_begin_result_t begin_frame(frame_state_t* frame,
         result.status = FRAME_SWAPCHAIN_OUT_OF_DATE;
         return result;
     }
-
-    // Reset and begin command buffer
-    VkCommandBuffer cmd = frame->command_buffer;
-    vkResetCommandBuffer(cmd, 0);
-
-    VkCommandBufferBeginInfo begin_info = {
-        .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
-        .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
-    };
-    vkBeginCommandBuffer(cmd, &begin_info);
 
     result.cmd    = cmd;
     result.status = FRAME_OK;
