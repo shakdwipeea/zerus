@@ -10,6 +10,7 @@
 
 #define GLFW_INCLUDE_VULKAN
 #include "prelude.h"
+#include "device.h"
 #include "GLFW/glfw3.h"
 
 typedef enum
@@ -23,13 +24,28 @@ typedef enum
     SURFACE_SWAPCHAIN_IMAGES_NOT_FOUND
 } surface_status_t;
 
-
-GLFWwindow* make_window()
+typedef struct
 {
+    uint32_t    width;
+    uint32_t    height;
+    const char* title;
+    bool        visible;
+} window_config_t;
+
+
+GLFWwindow* make_window(window_config_t config)
+{
+    uint32_t    width   = config.width == 0 ? 800 : config.width;
+    uint32_t    height  = config.height == 0 ? 600 : config.height;
+    const char* title   = config.title ? config.title : "Zerus";
+    int         visible = config.visible ? GLFW_TRUE : GLFW_FALSE;
+
     glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
     glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);
+    glfwWindowHint(GLFW_VISIBLE, visible);
 
-    GLFWwindow* window = glfwCreateWindow(800, 600, "Zerus", NULL, NULL);
+    GLFWwindow* window
+        = glfwCreateWindow((int) width, (int) height, title, NULL, NULL);
     if (!window)
     {
         fprintf(stderr, "Failed to create GLFW window\n");
@@ -38,7 +54,7 @@ GLFWwindow* make_window()
 
     // On Wayland/Hyprland, explicitly setting the window size after creation
     // nudges the compositor into acknowledging the requested dimensions.
-    glfwSetWindowSize(window, 800, 600);
+    glfwSetWindowSize(window, (int) width, (int) height);
 
     return window;
 }
@@ -273,12 +289,13 @@ surface_status_t create_swapchain_for_surface(allocator*      alloc,
     return SURFACE_OK;
 }
 
-surface_info_t create_surface(allocator*    alloc,
-                              VkInstance    instance,
-                              device_info_t device_info)
+surface_info_t create_surface(allocator*      alloc,
+                              VkInstance      instance,
+                              device_info_t   device_info,
+                              window_config_t window_config)
 {
     surface_info_t surface_info = { 0 };
-    surface_info.window         = make_window();
+    surface_info.window         = make_window(window_config);
 
     if (!surface_info.window)
     {
@@ -288,7 +305,10 @@ surface_info_t create_surface(allocator*    alloc,
 
     // Wait until the compositor gives us a real framebuffer size.
     // On Wayland/Hyprland this can be 0x0 initially.
-    wait_for_window_ready(surface_info.window);
+    if (window_config.visible)
+    {
+        wait_for_window_ready(surface_info.window);
+    }
 
     VkResult res = glfwCreateWindowSurface(
         instance, surface_info.window, NULL, &surface_info.surface);
@@ -298,8 +318,18 @@ surface_info_t create_surface(allocator*    alloc,
         return surface_info;
     }
 
-    int width, height;
+    int width  = 0;
+    int height = 0;
     glfwGetFramebufferSize(surface_info.window, &width, &height);
+
+    if (width == 0 || height == 0)
+    {
+        // Hidden windows can report 0x0 depending on platform/compositor state.
+        // Falling back to configured dimensions keeps test-mode swapchains
+        // deterministic without forcing the window visible.
+        width  = (int) (window_config.width == 0 ? 800 : window_config.width);
+        height = (int) (window_config.height == 0 ? 600 : window_config.height);
+    }
 
     surface_info.status = create_swapchain_for_surface(
         alloc, device_info, &surface_info, width, height);

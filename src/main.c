@@ -34,17 +34,14 @@ int main(int argc, char* argv[])
 
     allocator std_alloc = { std_malloc, std_free, NULL };
 
-    if (!glfwInit())
-    {
-        fprintf(stderr, "Failed to initialize GLFW\n");
-        return EXIT_FAILURE;
-    }
+    engine_config_t config = zerus_engine_default_config();
+    config.headless        = false;
 
-    zerus_engine_state_t engine = zerus_engine_init(&std_alloc);
+    zerus_engine_state_t engine = zerus_engine_init(&std_alloc, config);
 
-    if (!engine.initialized)
+    if (!engine.initialized || engine.err != INIT_OK)
     {
-        fprintf(stderr, "Failed to initialize engine\n");
+        fprintf(stderr, "Failed to initialize engine (err=%d)\n", engine.err);
         return EXIT_FAILURE;
     }
 

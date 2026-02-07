@@ -82,6 +82,8 @@ set(SOURCES
         include/engine/surface.h
         include/engine/frame.h
         include/engine/renderer.h
+        include/engine/gpu_image.h
+        include/engine/core.h
         include/engine/shaders.h
 )
 
@@ -123,5 +125,4 @@ install(TARGETS ${PROJECT_NAME} DESTINATION bin)
 # Testing
 enable_testing()
 add_subdirectory(tests)
-
 

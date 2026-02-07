@@ -9,7 +9,9 @@ add_test(NAME test_prelude COMMAND test_prelude)
 # Headless renderer E2E test (Vulkan required, no window/display needed)
 add_executable(test_renderer test_renderer.c)
 target_include_directories(test_renderer PRIVATE ${CMAKE_SOURCE_DIR}/include)
-target_link_libraries(test_renderer vulkan m)
+# test_renderer is headless, but it includes engine/core.h which compiles the
+# surface module in the same translation unit, so GLFW remains a link-time dep.
+target_link_libraries(test_renderer vulkan glfw m)
 add_test(NAME test_renderer COMMAND test_renderer)
 
 # Swapchain frame-loop test via GLFW surface.

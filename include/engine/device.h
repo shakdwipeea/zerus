@@ -1,13 +1,11 @@
-//
-// Created by akash on 5/7/25.
-//
-
 #ifndef DEVICE_H
 #define DEVICE_H
-#include "prelude.h"
 
+#include <stdio.h>
 
 #include <vulkan/vulkan_core.h>
+
+#include "prelude.h"
 
 typedef enum
 {
@@ -16,25 +14,51 @@ typedef enum
     DEVICE_NOT_FOUND,
     GRAPHICS_QUEUE_NOT_FOUND,
     DEVICE_CREATION_FAILED,
-
 } device_error_t;
+
+typedef struct
+{
+    device_error_t   error;
+    VkPhysicalDevice physical_device;
+    VkDevice         device;
+    VkQueue          graphics_queue;
+    VkQueue          compute_queue;
+    uint32_t         queue_index;
+} device_info_t;
+
+// Extension policy is internal to the engine rather than a public API surface.
+// Headless mode intentionally skips swapchain because it should remain usable
+// on systems where presentation support is unavailable (CI, capture tools,
+// etc.).
+static const char* const DEVICE_EXTENSIONS_WINDOWED[]
+    = { VK_KHR_SWAPCHAIN_EXTENSION_NAME,
+        VK_KHR_SPIRV_1_4_EXTENSION_NAME,
+        VK_KHR_SYNCHRONIZATION_2_EXTENSION_NAME,
+        VK_KHR_CREATE_RENDERPASS_2_EXTENSION_NAME };
+
+static const char* const DEVICE_EXTENSIONS_HEADLESS[]
+    = { VK_KHR_SPIRV_1_4_EXTENSION_NAME,
+        VK_KHR_SYNCHRONIZATION_2_EXTENSION_NAME,
+        VK_KHR_CREATE_RENDERPASS_2_EXTENSION_NAME };
 
 list_t* enumerate_devices(allocator* alloc, VkInstance instance)
 {
-    // create device
     uint32_t device_count = 0;
-    vkEnumeratePhysicalDevices(instance, &device_count, nullptr);
+    vkEnumeratePhysicalDevices(instance, &device_count, NULL);
+    if (device_count == 0)
+    {
+        return NULL;
+    }
 
     list_t* physical_devices = make_list(alloc, device_count);
     if (!physical_devices)
     {
-        return nullptr;
+        return NULL;
     }
 
     physical_devices->len = device_count;
     vkEnumeratePhysicalDevices(
         instance, &device_count, (VkPhysicalDevice*) &physical_devices->data);
-
     return physical_devices;
 }
 
@@ -68,28 +92,23 @@ void _print_queue_flags(VkQueueFlagBits flags)
         printf("%sPROTECTED", first ? "" : " | ");
         first = false;
     }
-    // Add other flags as needed...
 
     printf(")\n");
 }
 
-typedef struct
+device_info_t pick_device(allocator* alloc, VkInstance instance, bool headless)
 {
-    device_error_t   error;
-    VkPhysicalDevice physical_device;
-    VkDevice         device;
-    VkQueue          graphics_queue;
-    VkQueue          compute_queue;
-    uint32_t         queue_index;
-} device_info_t;
+    device_info_t            device_info      = { 0 };
+    list_t*                  physical_devices = NULL;
+    VkQueueFamilyProperties* families         = NULL;
+    VkPhysicalDevice         chosen_device    = VK_NULL_HANDLE;
 
-device_info_t pick_device(allocator* alloc, VkInstance instance)
-{
-    device_info_t device_info = { 0 };
-
-    list_t* physical_devices = enumerate_devices(alloc, instance);
-
-    VkPhysicalDevice choosen_device = nullptr;
+    physical_devices = enumerate_devices(alloc, instance);
+    if (!physical_devices)
+    {
+        device_info.error = DEVICE_NOT_FOUND;
+        return device_info;
+    }
 
     for (uint32_t i = 0; i < physical_devices->len; i++)
     {
@@ -98,144 +117,161 @@ device_info_t pick_device(allocator* alloc, VkInstance instance)
         VkPhysicalDeviceProperties props;
         vkGetPhysicalDeviceProperties(device, &props);
 
-        // picking the first discrete gpu for simplicity
+        // Prefer discrete when available to match app behavior, but keep a
+        // fallback for CI/software ICD environments.
         if (props.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU)
         {
-            choosen_device = device;
+            chosen_device = device;
             printf("found discrete GPU device\n");
             break;
         }
     }
 
-    // Fall back to any available device (e.g., integrated GPU, lavapipe)
-    if (choosen_device == nullptr && physical_devices->len > 0)
+    if (chosen_device == VK_NULL_HANDLE && physical_devices->len > 0)
     {
-        choosen_device = physical_devices->data[0];
+        chosen_device = physical_devices->data[0];
         printf("no discrete GPU found, using first available device\n");
     }
 
-    if (choosen_device == nullptr)
+    if (chosen_device == VK_NULL_HANDLE)
     {
         device_info.error = DEVICE_NOT_FOUND;
-        return device_info;
+        goto cleanup;
     }
 
-    // we found a device
-    device_info.physical_device = choosen_device;
+    device_info.physical_device = chosen_device;
 
-    // now lets look for a queue where we will submit the commands
-    uint32_t queue_family_count;
+    uint32_t queue_family_count = 0;
     vkGetPhysicalDeviceQueueFamilyProperties(
-        choosen_device, &queue_family_count, nullptr);
+        chosen_device, &queue_family_count, NULL);
     if (queue_family_count == 0)
     {
         device_info.error = QUEUE_FAMILY_NOT_FOUND;
-        return device_info;
+        goto cleanup;
     }
 
-    VkQueueFamilyProperties* families
-        = (VkQueueFamilyProperties*) alloc->malloc(
-            queue_family_count * sizeof(VkQueueFamilyProperties), alloc->ctx);
+    families = (VkQueueFamilyProperties*) alloc->malloc(
+        queue_family_count * sizeof(VkQueueFamilyProperties), alloc->ctx);
+    if (!families)
+    {
+        device_info.error = DEVICE_CREATION_FAILED;
+        goto cleanup;
+    }
 
     vkGetPhysicalDeviceQueueFamilyProperties(
-        choosen_device, &queue_family_count, families);
+        chosen_device, &queue_family_count, families);
 
+    printf("queue family count: %u\n", queue_family_count);
 
-    printf("queue family count: %d \n", queue_family_count);
-
-    uint32_t graphics_queue_index = -1, compute_queue_index = -1;
+    uint32_t graphics_queue_index          = UINT32_MAX;
+    uint32_t dedicated_compute_queue_index = UINT32_MAX;
     for (uint32_t i = 0; i < queue_family_count; i++)
     {
         VkQueueFamilyProperties queue_family = families[i];
 
-        if (queue_family.queueFlags & VK_QUEUE_GRAPHICS_BIT)
+        if (graphics_queue_index == UINT32_MAX
+            && (queue_family.queueFlags & VK_QUEUE_GRAPHICS_BIT))
         {
             graphics_queue_index = i;
         }
-        else if (queue_family.queueFlags & VK_QUEUE_COMPUTE_BIT)
+
+        if (dedicated_compute_queue_index == UINT32_MAX
+            && (queue_family.queueFlags & VK_QUEUE_COMPUTE_BIT)
+            && !(queue_family.queueFlags & VK_QUEUE_GRAPHICS_BIT))
         {
-            // check if there is a dedicated compute queue
-            compute_queue_index = i;
+            dedicated_compute_queue_index = i;
         }
 
-        printf("index %d", i);
+        printf("index %u ", i);
         _print_queue_flags(queue_family.queueFlags);
     }
 
-    if (graphics_queue_index == -1u)
+    if (graphics_queue_index == UINT32_MAX)
     {
         device_info.error = GRAPHICS_QUEUE_NOT_FOUND;
-        return device_info;
+        goto cleanup;
     }
 
-    uint32_t                queue_count            = 1;
     float                   default_queue_priority = 1.0f;
-    VkDeviceQueueCreateInfo queue_create_info[2] = { (VkDeviceQueueCreateInfo) {
-        .sType            = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
-        .queueCount       = 1,
-        .queueFamilyIndex = graphics_queue_index,
-        .pQueuePriorities = &default_queue_priority } };
+    uint32_t                queue_count            = 1;
+    VkDeviceQueueCreateInfo queue_create_info[2]   = {
+        {
+              .sType            = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
+              .queueCount       = 1,
+              .queueFamilyIndex = graphics_queue_index,
+              .pQueuePriorities = &default_queue_priority,
+        },
+    };
 
-    // if we have a dedicated compute queue, we create a logical one for that
-    if (compute_queue_index != -1u)
+    if (dedicated_compute_queue_index != UINT32_MAX)
     {
         queue_create_info[1] = (VkDeviceQueueCreateInfo) {
             .sType            = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
             .queueCount       = 1,
-            .queueFamilyIndex = compute_queue_index,
-            .pQueuePriorities = &default_queue_priority
+            .queueFamilyIndex = dedicated_compute_queue_index,
+            .pQueuePriorities = &default_queue_priority,
         };
-
         queue_count++;
     }
 
-    const char* device_extensions[4]
-        = { VK_KHR_SWAPCHAIN_EXTENSION_NAME,
-            VK_KHR_SPIRV_1_4_EXTENSION_NAME,
-            VK_KHR_SYNCHRONIZATION_2_EXTENSION_NAME,
-            VK_KHR_CREATE_RENDERPASS_2_EXTENSION_NAME };
+    const char* const* required_extensions
+        = headless ? DEVICE_EXTENSIONS_HEADLESS : DEVICE_EXTENSIONS_WINDOWED;
+    uint32_t required_extension_count
+        = headless ? (uint32_t) (sizeof(DEVICE_EXTENSIONS_HEADLESS)
+                                 / sizeof(DEVICE_EXTENSIONS_HEADLESS[0]))
+                   : (uint32_t) (sizeof(DEVICE_EXTENSIONS_WINDOWED)
+                                 / sizeof(DEVICE_EXTENSIONS_WINDOWED[0]));
 
     VkDeviceCreateInfo create_info = {
         .sType                   = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
-        .pNext                   = nullptr,
+        .pNext                   = NULL,
         .queueCreateInfoCount    = queue_count,
         .pQueueCreateInfos       = queue_create_info,
-        .enabledExtensionCount   = 4,
-        .ppEnabledExtensionNames = device_extensions,
+        .enabledExtensionCount   = required_extension_count,
+        .ppEnabledExtensionNames = required_extensions,
     };
 
     VkResult res = vkCreateDevice(
-        choosen_device, &create_info, nullptr, &device_info.device);
+        chosen_device, &create_info, NULL, &device_info.device);
     if (res != VK_SUCCESS)
     {
         device_info.error = DEVICE_CREATION_FAILED;
-        return device_info;
+        goto cleanup;
     }
 
-
     device_info.queue_index = graphics_queue_index;
-
     vkGetDeviceQueue(device_info.device,
                      graphics_queue_index,
                      0,
                      &device_info.graphics_queue);
 
-    if (compute_queue_index == -1u)
+    if (dedicated_compute_queue_index != UINT32_MAX)
     {
         vkGetDeviceQueue(device_info.device,
-                         compute_queue_index,
+                         dedicated_compute_queue_index,
                          0,
                          &device_info.compute_queue);
     }
     else
     {
-        // if not compute queue, we share the queue
+        // Shared queue keeps compute paths working even on devices with only a
+        // single universal queue family.
         device_info.compute_queue = device_info.graphics_queue;
     }
 
-    alloc->free(families, alloc->ctx);
-    alloc->free(physical_devices, alloc->ctx);
+    device_info.error = DEVICE_OK;
+
+cleanup:
+    if (families)
+    {
+        alloc->free(families, alloc->ctx);
+    }
+    if (physical_devices)
+    {
+        alloc->free(physical_devices, alloc->ctx);
+    }
 
     return device_info;
 }
+
 #endif  // DEVICE_H
