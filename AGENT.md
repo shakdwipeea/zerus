@@ -42,11 +42,14 @@ ctest --test-dir build --verbose
 
 ### Required Pre-Commit Verification
 
-Before committing or pushing, inspect `.github/workflows/test.yml` and run the same configure,
-build, and test commands locally in a clean build directory. Do not rely only on the existing
-orb build: its compiler or dependency versions may differ from GitHub Actions. If the exact CI
-toolchain is unavailable, align the environment first or explicitly report that CI parity was not
-verified before committing.
+Before committing or pushing, run the complete clean build and test check inside the Amp orb:
+
+```bash
+./.agents/check
+```
+
+Do not rely on an existing build directory. The check creates a fresh build using the Vulkan 1.4
+toolchain provisioned by `.agents/setup`, builds every target, and runs the full CTest suite.
 
 ### Code Quality
 ```bash

@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+readonly REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+readonly BUILD_DIR="$(mktemp -d)"
+trap 'rm -rf "${BUILD_DIR}"' EXIT
+
+export VK_ICD_FILENAMES="${VK_ICD_FILENAMES:-/usr/share/vulkan/icd.d/lvp_icd.json}"
+
+CC="${CC:-clang-20}" cmake -S "${REPO_ROOT}" -B "${BUILD_DIR}" \
+    -DCMAKE_BUILD_TYPE=Debug \
+    -DCMAKE_C_FLAGS=-Wno-unknown-warning-option \
+    -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
+    -DSHADERC_LIBRARIES=shaderc_combined
+cmake --build "${BUILD_DIR}" -j"$(nproc)"
+ctest --test-dir "${BUILD_DIR}" --verbose
