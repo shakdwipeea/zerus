@@ -40,6 +40,14 @@ ctest --test-dir build --verbose
 ./build/tests/test_engine
 ```
 
+### Required Pre-Commit Verification
+
+Before committing or pushing, inspect `.github/workflows/test.yml` and run the same configure,
+build, and test commands locally in a clean build directory. Do not rely only on the existing
+orb build: its compiler or dependency versions may differ from GitHub Actions. If the exact CI
+toolchain is unavailable, align the environment first or explicitly report that CI parity was not
+verified before committing.
+
 ### Code Quality
 ```bash
 # Format all code

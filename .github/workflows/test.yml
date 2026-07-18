@@ -17,11 +17,37 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-            cmake gcc-14 \
+            cmake curl gcc-14 \
             libvulkan-dev vulkan-validationlayers mesa-vulkan-drivers \
             xvfb \
             libglfw3-dev libcglm-dev libshaderc-dev \
             pkg-config
+
+      - name: Install Vulkan 1.4 headers and loader
+        env:
+          VULKAN_VERSION: 1.4.309
+        run: |
+          work_dir="$(mktemp -d)"
+          trap 'rm -rf "${work_dir}"' EXIT
+
+          mkdir "${work_dir}/headers" "${work_dir}/loader"
+          curl -fsSL \
+            "https://github.com/KhronosGroup/Vulkan-Headers/archive/refs/tags/v${VULKAN_VERSION}.tar.gz" \
+            | tar -xz --strip-components=1 -C "${work_dir}/headers"
+          cmake -S "${work_dir}/headers" -B "${work_dir}/headers/build" \
+            -DCMAKE_INSTALL_PREFIX=/usr/local
+          sudo cmake --install "${work_dir}/headers/build"
+
+          curl -fsSL \
+            "https://github.com/KhronosGroup/Vulkan-Loader/archive/refs/tags/v${VULKAN_VERSION}.tar.gz" \
+            | tar -xz --strip-components=1 -C "${work_dir}/loader"
+          cmake -S "${work_dir}/loader" -B "${work_dir}/loader/build" \
+            -DBUILD_TESTS=OFF \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX=/usr/local
+          cmake --build "${work_dir}/loader/build" -j"$(nproc)"
+          sudo cmake --install "${work_dir}/loader/build"
+          sudo ldconfig
 
       - name: Configure
         run: cmake -B build -DCMAKE_BUILD_TYPE=Debug -DCMAKE_C_COMPILER=gcc-14
