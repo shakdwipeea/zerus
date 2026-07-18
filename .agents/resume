@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Zerus has no persistent services to reconnect after an orb resumes.
+echo "Zerus orb is ready."

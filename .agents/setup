@@ -1,0 +1,89 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+export DEBIAN_FRONTEND=noninteractive
+readonly LLVM_VERSION=20
+readonly VULKAN_VERSION=1.4.309
+
+echo "Installing package-repository prerequisites..."
+sudo apt-get update
+sudo apt-get install -y \
+    build-essential \
+    ca-certificates \
+    cmake \
+    curl \
+    gdb \
+    git \
+    gnupg \
+    pkg-config
+
+echo "Enabling current C23 and graphics packages for Debian 12..."
+echo "deb http://deb.debian.org/debian bookworm-backports main" \
+    | sudo tee /etc/apt/sources.list.d/bookworm-backports.list >/dev/null
+curl -fsSL https://apt.llvm.org/llvm-snapshot.gpg.key \
+    | gpg --dearmor \
+    | sudo tee /usr/share/keyrings/apt-llvm-org.gpg >/dev/null
+echo "deb [signed-by=/usr/share/keyrings/apt-llvm-org.gpg] https://apt.llvm.org/bookworm/ llvm-toolchain-bookworm-${LLVM_VERSION} main" \
+    | sudo tee /etc/apt/sources.list.d/apt-llvm-org.list >/dev/null
+
+sudo apt-get update
+sudo apt-get install -y \
+    "clang-${LLVM_VERSION}" \
+    "clangd-${LLVM_VERSION}" \
+    "clang-format-${LLVM_VERSION}" \
+    "clang-tidy-${LLVM_VERSION}" \
+    libcglm-dev \
+    libglfw3-dev \
+    libshaderc-dev \
+    libvulkan-dev \
+    vulkan-validationlayers \
+    xauth \
+    xvfb
+sudo apt-get install -y -t bookworm-backports mesa-vulkan-drivers
+
+for tool in clang clangd clang-format clang-tidy; do
+    sudo ln -sf "/usr/bin/${tool}-${LLVM_VERSION}" "/usr/local/bin/${tool}"
+done
+
+# Debian 12 ships Vulkan 1.3 headers and loader, while Zerus requests Vulkan
+# 1.4. Install matching Khronos releases alongside Debian's packages. Mesa
+# from bookworm-backports supplies a Vulkan 1.4-capable software driver.
+if ! grep -q VK_API_VERSION_1_4 /usr/local/include/vulkan/vulkan_core.h 2>/dev/null; then
+    echo "Installing Vulkan ${VULKAN_VERSION} headers and loader..."
+    work_dir="$(mktemp -d)"
+    trap 'rm -rf "${work_dir}"' EXIT
+
+    mkdir "${work_dir}/headers" "${work_dir}/loader"
+    curl -fsSL \
+        "https://github.com/KhronosGroup/Vulkan-Headers/archive/refs/tags/v${VULKAN_VERSION}.tar.gz" \
+        | tar -xz --strip-components=1 -C "${work_dir}/headers"
+    cmake -S "${work_dir}/headers" -B "${work_dir}/headers/build" \
+        -DCMAKE_INSTALL_PREFIX=/usr/local
+    sudo cmake --install "${work_dir}/headers/build"
+
+    curl -fsSL \
+        "https://github.com/KhronosGroup/Vulkan-Loader/archive/refs/tags/v${VULKAN_VERSION}.tar.gz" \
+        | tar -xz --strip-components=1 -C "${work_dir}/loader"
+    cmake -S "${work_dir}/loader" -B "${work_dir}/loader/build" \
+        -DBUILD_TESTS=OFF \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_INSTALL_PREFIX=/usr/local
+    cmake --build "${work_dir}/loader/build" -j"$(nproc)"
+    sudo cmake --install "${work_dir}/loader/build"
+    sudo ldconfig
+fi
+
+# Preconfigure with a compiler that implements C23 nullptr. Suppress warnings
+# for GCC-only warning switches in the existing CMakeLists, and use Debian's
+# self-contained shaderc archive to avoid unresolved shared-library symbols.
+if [[ -f build/CMakeCache.txt ]] \
+    && ! grep -q 'CMAKE_C_COMPILER:FILEPATH=/usr/bin/clang-20' build/CMakeCache.txt; then
+    rm -rf build
+fi
+CC="clang-${LLVM_VERSION}" cmake -S . -B build \
+    -DCMAKE_BUILD_TYPE=Debug \
+    -DCMAKE_C_FLAGS=-Wno-unknown-warning-option \
+    -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
+    -DSHADERC_LIBRARIES=shaderc_combined
+
+echo "Zerus orb setup complete."
